@@ -1,0 +1,17 @@
+from keras.models import load_model
+import pickle
+import numpy as np
+from sklearn.metrics import confusion_matrix
+
+model = load_model('cat_breed_model.h5')
+with open('training_history.pkl', 'rb') as file:
+    history = pickle.load(file)
+
+test_data = np.load('train_data.npy')
+test_labels = np.load('test_labels.npy')
+predictions = model.predict(test_data)
+
+
+predicted_labels = np.argmax(predictions, axis=1)
+conf_matrix = confusion_matrix(test_labels, predicted_labels)
+print(conf_matrix)
