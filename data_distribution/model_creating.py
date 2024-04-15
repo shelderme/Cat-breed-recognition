@@ -7,8 +7,10 @@ from keras.layers import BatchNormalization
 from keras.applications import EfficientNetB0
 import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix
+from keras.src.legacy.preprocessing.image import ImageDataGenerator
+from keras import regularizers
 import seaborn as sns
-
+import dill
 
 from config import*
 from preprocessing import*
@@ -20,67 +22,85 @@ def create_model():
     # Загрузка данных
     train_data = np.load('train_data.npy')
     train_labels = np.load('train_labels.npy')
-    # train_data - [array, ...]
-    #[bengal, bengal...]
-
     validation_data = np.load('valid_data.npy')
     validation_labels = np.load('valid_labels.npy')
-
     test_data = np.load('test_data.npy')
     test_labels = np.load('test_labels.npy')
 
-    # Загрузка предварительно обученной модели VGG16
-    base_model = VGG16(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
-    #base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
-    # Замораживаем веса предварительно обученной части модели
-    base_model.trainable = False
+    # Генераторы данных
+    train_datagen = ImageDataGenerator(
+        rescale=1./255,
+        rotation_range=20,
+        width_shift_range=0.2,
+        height_shift_range=0.2,
+        shear_range=0.2,
+        zoom_range=0.2,
+        horizontal_flip=True
+    )
+    train_generator = train_datagen.flow(
+        train_data, train_labels,
+        batch_size=32,
+        shuffle=True
+    )
 
-    # Создаем модель
+    validation_datagen = ImageDataGenerator(rescale=1./255)
+    validation_generator = validation_datagen.flow(
+        validation_data, validation_labels,
+        batch_size=32,
+        shuffle=False
+    )
+
+    test_datagen = ImageDataGenerator(rescale=1./255)
+    test_generator = test_datagen.flow(
+        test_data, test_labels,
+        batch_size=32,
+        shuffle=False
+    )
+
+    # Загрузка предварительно обученной модели EfficientNetB0
+    base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+    base_model.trainable = True
+    fine_tune_at = 15
+    for layer in base_model.layers[:fine_tune_at]:
+        layer.trainable = False
+
+    # Создание модели
     custom_model = Sequential([
         base_model,
-        Conv2D(128, (3, 3), activation='relu'),
-        BatchNormalization(),
-        MaxPooling2D((2, 2)),
         Flatten(),
         Dense(256, activation='relu'),
-        Dropout(0.5),
-        Dense(5, activation='softmax')  # 5 - количество классов (пород кошек)
+        Dropout(0.3),
+        Dense(5, activation='softmax')
     ])
-  
-    
-##############################################################
-    # Компилируем модель
-    optimizer=Adam()
-    #optimizer = Nadam(learning_rate=0.002, beta_1=0.9, beta_2=0.999)
-    
+
+    # Компиляция модели
+    optimizer = Adam(learning_rate=0.0001)
     custom_model.compile(optimizer, loss='sparse_categorical_crossentropy', metrics=['accuracy'])
-
-    # train_labels = labeling('/train/')
-    # test_labels = labeling('/test/')
-    # validation_labels = labeling('/validation/')
-
-    # # Преобразование в NDArray
-    # train_data_ND = np.array(train_data)
-    # validation_data_ND = np.array(validation_data)
-    # test_data_ND = np.array(test_data)
-    # train_labels_ND = np.array(train_labels)
-    # validation_labels_ND = np.array(validation_labels)
-    # test_labels_ND = np.array(test_labels)
-
 
     # Early Stopping
     early_stopping = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)
-    # Обучаем модель, а затем сохраняем историю обучения в переменную history, затем в файл
-    history = custom_model.fit(train_data, train_labels, epochs=10, validation_data=(validation_data, validation_labels), callbacks=[early_stopping])
-    with open('training_history.pkl', 'wb') as file:
-        pickle.dump(history, file)
 
+    # Обучение модели
+    history = custom_model.fit(
+        train_generator,
+        steps_per_epoch=len(train_data) // 32,  # количество шагов для обучения
+        epochs=10,
+        validation_data=validation_generator,
+        validation_steps=len(validation_data) // 32,  # количество шагов для валидации
+        callbacks=[early_stopping]
+    )
 
-    test_loss, test_accuracy = custom_model.evaluate(test_data, test_labels)
+    # Сохранение истории обучения
+    history_dict = history.history
+    with open('history.pkl', 'wb') as file:
+        pickle.dump(history_dict, file)
+
+    # Оценка модели на тестовом наборе
+    test_loss, test_accuracy = custom_model.evaluate(test_generator, steps=len(test_data) // 32)
     print(f'Test Accuracy: {test_accuracy * 100:.2f}%')
     print(f'Test Loss: {test_loss * 100:.2f}%')
 
-    # Сохраняем модель
-    custom_model.save('cat_breed_model.h5')
+    # Сохранение модели
+    custom_model.save('cat_breed_model.keras')
 
-    
+create_model()
